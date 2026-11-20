@@ -37,7 +37,7 @@ set(ENGINE_SOURCES
 # the chip DB lookup a last-resort install location (FindChipDbFile in the engine's parse.c).
 foreach(src IN LISTS ENGINE_SOURCES)
     set_property(SOURCE ${src} APPEND PROPERTY COMPILE_OPTIONS
-        "SHELL:-include \"${CMAKE_SOURCE_DIR}/src/core/sf_hook.h\"")
+        -include ${CMAKE_SOURCE_DIR}/src/core/sf_hook.h) # two list items; SHELL: is not honoured on source properties
     set_property(SOURCE ${src} APPEND PROPERTY COMPILE_DEFINITIONS
         "SF_DATADIR=\"${CMAKE_INSTALL_FULL_DATADIR}/DediProg\"")
 endforeach()
