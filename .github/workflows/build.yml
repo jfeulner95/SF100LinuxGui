@@ -76,7 +76,7 @@ jobs:
           fi
           tar -czf dist/dpcmd-${{ matrix.os }}.tar.gz -C dist dpcmd
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: dpcmd-${{ matrix.os }}
           path: dist/dpcmd-${{ matrix.os }}.tar.gz
