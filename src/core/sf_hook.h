@@ -1,4 +1,4 @@
-/* Force-included (-include) into the ENGINE sources only (external/SF100Linux/*.c), never into
+/* Force-included (-include) into the ENGINE sources only (the .c files in external/SF100Linux), never into
  * sf100core.c, sflog.c, main.c or the tests. It redirects the engine's stdio output to sflog.c so a
  * log handler (sf_set_log_handler) can capture it without patching the engine. Without a handler the
  * sf_hook_* functions behave exactly like the libc call they replace. */

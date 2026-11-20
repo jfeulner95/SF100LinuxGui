@@ -159,7 +159,9 @@ int CoreWorker::doVerify(const QByteArray& d, Range r, Result& out)
     const quint64 len = dataLen(d, r);
     if (len == 0)
         return SF_ERR_ARG;
-    int st = sf_verify(reinterpret_cast<const uint8_t*>(d.constData()), len, r.addr, &out.firstDiff);
+    uint64_t diff = 0; // quint64 and uint64_t are distinct types on Linux
+    int st = sf_verify(reinterpret_cast<const uint8_t*>(d.constData()), len, r.addr, &diff);
+    out.firstDiff = diff;
     if (st == SF_ERR_VERIFY) { // hand the chip's contents back so the GUI can show them
         QByteArray rb;
         if (doRead(Range{r.addr, len}, rb) == SF_OK)
