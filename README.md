@@ -74,7 +74,7 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-Outputs: `build/dpcmd` and `build/gui/sf100gui.app` (the chip database is placed in the bundle's `Resources`). The .app links Homebrew Qt and is not self-contained yet (`macdeployqt` is a later task). No driver or permission setup is needed on macOS.
+Outputs: `build/dpcmd` and `build/gui/sf100gui.app` (the chip database is placed in the bundle's `Resources`). This build-tree .app still links Homebrew Qt; to make it self-contained, run the same steps as the CI job "Deploy macOS app" (`macdeployqt`, ad-hoc `codesign`). No driver or permission setup is needed on macOS.
 
 ## Linux USB permissions (udev)
 
@@ -126,13 +126,17 @@ The `build` workflow runs on ubuntu-latest, macos-latest (Apple Silicon) and mac
 - `dpcmd`
 - `ChipInfoDb.dedicfg`
 - `60-dediprog.rules`
+- `LICENSE`
 - `sf100gui` (Linux) or `sf100gui.app` (macOS)
+
+On macOS each run also uploads `sf100gui-<os>-dmg` with a disk image. The app inside is self-contained: Qt, libusb and libxml2 are bundled, and `dpcmd` is included at `sf100gui.app/Contents/MacOS/dpcmd`. Homebrew is not needed. Use the image that matches your Mac (`macos-latest` = Apple Silicon, `macos-15-intel` = Intel).
 
 Notes:
 
-- Runtime dependencies: libusb-1.0, libxml2, Qt 6 (on macOS: Homebrew `libusb`, `libxml2`, `qt`).
-- After extracting, the executable bit is preserved by tar; if needed, `chmod +x dpcmd sf100gui`.
-- macOS may block downloaded, unsigned binaries. Remove the quarantine flag: `xattr -d com.apple.quarantine dpcmd` (and `xattr -dr com.apple.quarantine sf100gui.app`).
+- Linux runtime dependencies: libusb-1.0, libxml2, Qt 6 (`qt6-base-dev` or the Qt 6 runtime packages).
+- The macOS app requires at least the macOS version of the CI runner that built it, because the bundled Homebrew libraries are built for that version.
+- The app is signed ad hoc, not with an Apple Developer ID, so Gatekeeper blocks it after download. Either right-click the app and choose Open, or run `xattr -dr com.apple.quarantine /Applications/sf100gui.app` (adjust the path to where you copied it).
+- After extracting the tar.gz, the executable bit is preserved; if needed, `chmod +x dpcmd sf100gui`.
 - On Linux, install the udev rule from the archive as described above.
 
 ## Working with the engine submodule
@@ -169,6 +173,15 @@ The code builds and passes the hardware-free tests and GUI/CLI smoke tests in CI
 
 ## License
 
-The engine (`external/SF100Linux`) is licensed under the GNU General Public License, version 2 (see `external/SF100Linux/LICENSE`).
+GPL-2.0-only, see [LICENSE](LICENSE). The engine (`external/SF100Linux`) is DediProg's SF100Linux, licensed under GPL version 2 without an "or later" clause; because `dpcmd`, `libsf100core` and the GUI link it, this repository uses the same license.
 
-License of this repository: to be decided (must be GPL-compatible because it links the GPL engine). There is no LICENSE file yet.
+Third-party components used by the binaries:
+
+| Component | License | Notes |
+|-----------|---------|-------|
+| SF100Linux engine | GPL-2.0 | `external/SF100Linux` |
+| Qt 6 (Core, Gui, Widgets) | used under GPL-2.0 (Qt is also offered under LGPL-3.0 / GPL-3.0) | bundled in the macOS app |
+| libusb-1.0 | LGPL-2.1-or-later | bundled in the macOS app |
+| libxml2 | MIT | bundled in the macOS app |
+
+Source code for every released binary is this repository at the corresponding commit (plus the submodule commit it pins).

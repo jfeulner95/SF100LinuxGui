@@ -15,7 +15,11 @@ qt_add_executable(sf100gui MACOSX_BUNDLE
     statusregdialog.h
     statusregdialog.cpp
 )
-set_target_properties(sf100gui PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+set_target_properties(sf100gui PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
+    MACOSX_BUNDLE_BUNDLE_NAME "SF100 GUI"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "io.github.jfeulner95.sf100gui"
+    MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1.0"
+    MACOSX_BUNDLE_BUNDLE_VERSION "0.1.0")
 target_link_libraries(sf100gui PRIVATE Qt6::Widgets sf100core)
 target_compile_options(sf100gui PRIVATE -Wall)
 
