@@ -53,7 +53,14 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+      # tar keeps the executable bit (the artifact zip alone would drop it)
+      - name: Package
+        run: |
+          mkdir -p dist/dpcmd
+          cp build/dpcmd build/ChipInfoDb.dedicfg external/SF100Linux/60-dediprog.rules dist/dpcmd/
+          tar -czf dist/dpcmd-${{ matrix.os }}.tar.gz -C dist dpcmd
+
       - uses: actions/upload-artifact@v5
         with:
           name: dpcmd-${{ matrix.os }}
-          path: build/dpcmd
+          path: dist/dpcmd-${{ matrix.os }}.tar.gz
