@@ -1,0 +1,4 @@
+[submodule "external/SF100Linux"]
+	path = external/SF100Linux
+	url = https://github.com/jfeulner95/SF100Linux.git
+	branch = macos-gui-fixes
