@@ -20,11 +20,11 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkg-config libusb-1.0-0-dev libxml2-dev
+          sudo apt-get install -y build-essential cmake pkg-config libusb-1.0-0-dev libxml2-dev qt6-base-dev libgl1-mesa-dev
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install libusb pkg-config libxml2
+        run: brew install libusb pkg-config libxml2 qt
 
       # The fork must still build standalone with its own Makefile (Linux only).
       - name: Engine standalone build (Linux)
@@ -35,7 +35,7 @@ jobs:
         run: |
           EXTRA=""
           if [ "$RUNNER_OS" = "macOS" ]; then
-            EXTRA="-DCMAKE_PREFIX_PATH=$(brew --prefix libxml2)"
+            EXTRA="-DCMAKE_PREFIX_PATH=$(brew --prefix libxml2);$(brew --prefix qt)"
           fi
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release $EXTRA
 
@@ -45,6 +45,16 @@ jobs:
       # With no arguments dpcmd prints its usage and exits before touching USB.
       - name: Smoke test
         run: ./build/dpcmd
+
+      # Builds the whole UI but never opens USB (offscreen platform plugin, no display needed).
+      - name: GUI smoke test
+        run: |
+          export QT_QPA_PLATFORM=offscreen
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            ./build/gui/sf100gui.app/Contents/MacOS/sf100gui --smoke
+          else
+            ./build/gui/sf100gui --smoke
+          fi
 
       - name: Clean engine standalone build (Linux)
         if: runner.os == 'Linux'
@@ -58,6 +68,12 @@ jobs:
         run: |
           mkdir -p dist/dpcmd
           cp build/dpcmd build/ChipInfoDb.dedicfg external/SF100Linux/60-dediprog.rules dist/dpcmd/
+          # NOTE: the macOS .app links Homebrew Qt and is NOT self-contained; macdeployqt is a later task.
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cp -R build/gui/sf100gui.app dist/dpcmd/
+          else
+            cp build/gui/sf100gui dist/dpcmd/
+          fi
           tar -czf dist/dpcmd-${{ matrix.os }}.tar.gz -C dist dpcmd
 
       - uses: actions/upload-artifact@v5

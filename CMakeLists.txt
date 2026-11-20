@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(sf100 C)
+project(sf100 C CXX)
 
 include(GNUInstallDirs)
 
@@ -75,4 +75,14 @@ install(FILES ${ENGINE_DIR}/ChipInfoDb.dedicfg DESTINATION ${CMAKE_INSTALL_DATAD
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # Absolute destination: still honours DESTDIR, so packagers can stage it elsewhere.
     install(FILES ${ENGINE_DIR}/60-dediprog.rules DESTINATION /etc/udev/rules.d)
+endif()
+
+option(SF100_BUILD_GUI "Build the Qt GUI" ON)
+if(SF100_BUILD_GUI)
+    find_package(Qt6 6.4 COMPONENTS Widgets)
+    if(Qt6_FOUND)
+        add_subdirectory(gui)
+    else()
+        message(STATUS "Qt6 Widgets (>= 6.4) not found - skipping sf100gui")
+    endif()
 endif()
