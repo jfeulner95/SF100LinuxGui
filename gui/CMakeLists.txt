@@ -6,6 +6,14 @@ qt_add_executable(sf100gui MACOSX_BUNDLE
     mainwindow.cpp
     coreworker.h
     coreworker.cpp
+    hexview.h
+    hexview.cpp
+    configdialog.h
+    configdialog.cpp
+    chipselectdialog.h
+    chipselectdialog.cpp
+    statusregdialog.h
+    statusregdialog.cpp
 )
 set_target_properties(sf100gui PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 target_link_libraries(sf100gui PRIVATE Qt6::Widgets sf100core)

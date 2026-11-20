@@ -1,6 +1,12 @@
 #include "mainwindow.h"
 
+#include "chipselectdialog.h"
+#include "configdialog.h"
+#include "hexview.h"
+#include "statusregdialog.h"
+
 #include <QAction>
+#include <QAbstractItemView>
 #include <QApplication>
 #include <QDockWidget>
 #include <QFileDialog>
@@ -8,8 +14,10 @@
 #include <QFontDatabase>
 #include <QHBoxLayout>
 #include <QIcon>
+#include <QInputDialog>
 #include <QKeySequence>
 #include <QLabel>
+#include <QLineEdit>
 #include <QLocale>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -17,12 +25,12 @@
 #include <QProgressBar>
 #include <QRegularExpression>
 #include <QStatusBar>
+#include <QStringList>
 #include <QStyle>
 #include <QTabWidget>
 #include <QTime>
 #include <QToolBar>
 #include <QVBoxLayout>
-#include <cstdio>
 
 using Op = CoreWorker::Op;
 using Range = CoreWorker::Range;
@@ -43,40 +51,9 @@ QString hexAddr(quint64 a)
     return QString::asprintf("0x%08llX", static_cast<unsigned long long>(a));
 }
 
-// WP3.1 placeholder: plain hex dump of the first 64 KiB. WP3.2 replaces this with a real hex view.
-void showBuffer(QPlainTextEdit* view, const QByteArray& d)
+quint32 crcOf(const QByteArray& d)
 {
-    if (d.isEmpty()) {
-        view->setPlainText(QStringLiteral("(empty)"));
-        return;
-    }
-    const int n = int(qMin<qsizetype>(d.size(), 64 * 1024));
-    const auto* b = reinterpret_cast<const uchar*>(d.constData());
-    QByteArray out;
-    out.reserve(n / 16 * 80 + 64);
-    char line[128];
-    for (int i = 0; i < n; i += 16) {
-        int p = std::snprintf(line, sizeof line, "%08X ", i);
-        for (int j = 0; j < 16; ++j) {
-            if (i + j < n)
-                p += std::snprintf(line + p, sizeof line - size_t(p), " %02X", b[i + j]);
-            else
-                p += std::snprintf(line + p, sizeof line - size_t(p), "   ");
-            if (j == 7)
-                line[p++] = ' ';
-        }
-        line[p++] = ' ';
-        line[p++] = '|';
-        for (int j = 0; j < 16 && i + j < n; ++j)
-            line[p++] = (b[i + j] >= 32 && b[i + j] < 127) ? char(b[i + j]) : '.';
-        line[p++] = '|';
-        line[p++] = '\n';
-        out.append(line, p);
-    }
-    QString text = QString::fromLatin1(out);
-    if (d.size() > n)
-        text += QStringLiteral("… %1 more bytes").arg(d.size() - n);
-    view->setPlainText(text);
+    return sf_crc32(reinterpret_cast<const uint8_t*>(d.constData()), size_t(d.size())); // pure helper, GUI thread ok
 }
 } // namespace
 
@@ -94,6 +71,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     connect(m_worker, &CoreWorker::progress, this, &MainWindow::onProgress);
     connect(m_worker, &CoreWorker::finished, this, &MainWindow::onFinished);
     m_thread.start();
+
+    m_crcTimer.setSingleShot(true);
+    m_crcTimer.setInterval(300);
+    connect(&m_crcTimer, &QTimer::timeout, this, [this] { updateFileLabel(crcOf(fileBuf()), true); });
 
     m_tick.setInterval(200);
     connect(&m_tick, &QTimer::timeout, this, &MainWindow::updateRate);
@@ -126,6 +107,7 @@ void MainWindow::buildUi()
     resize(1100, 750);
 
     m_aDetect = makeAction(tr("Detect"), "edit-find", QStyle::SP_BrowserReload, &MainWindow::actDetect);
+    m_aSelect = makeAction(tr("Select"), "view-list-details", QStyle::SP_FileDialogContentsView, &MainWindow::actSelect);
     m_aFile = makeAction(tr("&Open…"), "document-open", QStyle::SP_DialogOpenButton, &MainWindow::actFile);
     m_aFile->setIconText(tr("File"));
     m_aFile->setShortcut(QKeySequence::Open);
@@ -139,18 +121,22 @@ void MainWindow::buildUi()
     m_aVerify = makeAction(tr("Verify"), "dialog-ok-apply", QStyle::SP_DialogApplyButton, &MainWindow::actVerify);
     m_aBatch = makeAction(tr("Batch"), "system-run", QStyle::SP_MediaPlay, &MainWindow::actBatch);
     m_aRead = makeAction(tr("Read"), "go-up", QStyle::SP_ArrowUp, &MainWindow::actRead);
-    m_aConfig = makeAction(tr("Config"), "preferences-system", QStyle::SP_FileDialogDetailedView, nullptr);
-    m_aStatus = makeAction(tr("Status Reg"), "dialog-information", QStyle::SP_MessageBoxInformation, nullptr);
+    m_aConfig = makeAction(tr("Config"), "preferences-system", QStyle::SP_FileDialogDetailedView, &MainWindow::actConfig);
+    m_aStatus = makeAction(tr("Status Reg"), "dialog-information", QStyle::SP_MessageBoxInformation, &MainWindow::actStatus);
     m_aCancel = makeAction(tr("Cancel"), "process-stop", QStyle::SP_DialogCancelButton, &MainWindow::actCancel);
-    m_aConfig->setToolTip(tr("coming in WP3.2"));
-    m_aStatus->setToolTip(tr("coming in WP3.2"));
+    m_aGoto = makeAction(tr("&Go to address…"), "go-jump", QStyle::SP_ArrowRight, &MainWindow::actGoto);
+    m_aGoto->setShortcut(QKeySequence::fromString(QStringLiteral("Ctrl+G")));
+    m_aNextDiff = makeAction(tr("&Next difference"), "go-next", QStyle::SP_ArrowForward, &MainWindow::actNextDiff);
+    m_aNextDiff->setShortcut(QKeySequence::fromString(QStringLiteral("F3")));
+    m_aCopyToFile = makeAction(tr("&Copy chip buffer to file buffer"), "edit-copy", QStyle::SP_FileIcon,
+                               &MainWindow::actCopyToFile);
 
     auto* tb = addToolBar(tr("Operations"));
     tb->setObjectName(QStringLiteral("toolbar"));
     tb->setMovable(false);
     tb->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
     tb->setIconSize(QSize(32, 32));
-    for (QAction* a : {m_aDetect, m_aFile, m_aSave, m_aBlank, m_aErase, m_aProg, m_aVerify, m_aBatch, m_aRead,
+    for (QAction* a : {m_aDetect, m_aSelect, m_aFile, m_aSave, m_aBlank, m_aErase, m_aProg, m_aVerify, m_aBatch, m_aRead,
                        m_aConfig, m_aStatus, m_aCancel}) {
         if (a == m_aBlank || a == m_aConfig || a == m_aCancel)
             tb->addSeparator();
@@ -165,8 +151,12 @@ void MainWindow::buildUi()
     quit->setShortcut(QKeySequence::Quit);
     connect(quit, &QAction::triggered, this, &QWidget::close);
     fileMenu->addAction(quit);
+    auto* editMenu = menuBar()->addMenu(tr("&Edit"));
+    editMenu->addAction(m_aGoto);
+    editMenu->addAction(m_aNextDiff);
+    editMenu->addAction(m_aCopyToFile);
     auto* opMenu = menuBar()->addMenu(tr("&Operations"));
-    for (QAction* a : {m_aDetect, m_aBlank, m_aErase, m_aProg, m_aVerify, m_aBatch, m_aRead, m_aConfig, m_aStatus,
+    for (QAction* a : {m_aDetect, m_aSelect, m_aBlank, m_aErase, m_aProg, m_aVerify, m_aBatch, m_aRead, m_aConfig, m_aStatus,
                        m_aCancel})
         opMenu->addAction(a);
     auto* about = new QAction(tr("&About"), this);
@@ -174,14 +164,12 @@ void MainWindow::buildUi()
     menuBar()->addMenu(tr("&Help"))->addAction(about);
 
     // Buffers
-    const QFont mono = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-    m_fileView = new QPlainTextEdit;
-    m_chipView = new QPlainTextEdit;
-    for (QPlainTextEdit* v : {m_fileView, m_chipView}) {
-        v->setReadOnly(true);
-        v->setFont(mono);
-        v->setLineWrapMode(QPlainTextEdit::NoWrap);
-    }
+    m_fileView = new HexView(true);
+    m_chipView = new HexView(false);
+    connect(m_fileView, &HexView::bufferEdited, this, [this] {
+        m_chipView->clearCompare(); // its compare data is the pre-edit file
+        m_crcTimer.start();
+    });
     m_tabs = new QTabWidget;
     m_tabs->addTab(m_fileView, tr("File buffer"));
     m_tabs->addTab(m_chipView, tr("Chip buffer"));
@@ -191,7 +179,7 @@ void MainWindow::buildUi()
     m_log = new QPlainTextEdit;
     m_log->setReadOnly(true);
     m_log->setMaximumBlockCount(5000);
-    m_log->setFont(mono);
+    m_log->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     m_bar = new QProgressBar;
     m_bar->setRange(0, 1000);
     m_bar->setValue(0);
@@ -214,26 +202,35 @@ void MainWindow::buildUi()
     m_progLabel = new QLabel(tr("No programmer"));
     m_chipLabel = new QLabel(tr("No chip"));
     m_fileLabel = new QLabel(tr("No file"));
-    for (QLabel* l : {m_progLabel, m_chipLabel, m_fileLabel})
+    m_rangeLabel = new QLabel;
+    for (QLabel* l : {m_progLabel, m_chipLabel, m_fileLabel, m_rangeLabel})
         statusBar()->addPermanentWidget(l);
+    updateRangeLabel();
 }
 
 void MainWindow::updateActions()
 {
     const bool idle = !m_busy;
     const bool chip = idle && m_haveChip;
-    const bool file = !m_file.isEmpty();
+    const bool file = !fileBuf().isEmpty();
     m_aDetect->setEnabled(idle);
     m_aFile->setEnabled(idle);
-    m_aSave->setEnabled(idle && !m_chip.isEmpty());
+    m_aSave->setEnabled(idle && !chipBuf().isEmpty());
     m_aBlank->setEnabled(chip);
     m_aErase->setEnabled(chip);
     m_aRead->setEnabled(chip);
     m_aProg->setEnabled(chip && file);
     m_aVerify->setEnabled(chip && file);
     m_aBatch->setEnabled(chip && file);
-    m_aConfig->setEnabled(false); // WP3.2
-    m_aStatus->setEnabled(false); // WP3.2
+    m_aSelect->setEnabled(idle);
+    m_aConfig->setEnabled(idle); // not while busy: the range/config must not change under a running op
+    m_aStatus->setEnabled(chip);
+    m_aCopyToFile->setEnabled(idle && !chipBuf().isEmpty());
+    m_fileView->setEditTriggers(idle ? QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed |
+                                           QAbstractItemView::AnyKeyPressed
+                                     : QAbstractItemView::NoEditTriggers);
+    if (m_srDlg)
+        m_srDlg->setBusy(m_busy);
     m_aCancel->setEnabled(m_busy);
 }
 
@@ -322,63 +319,116 @@ void MainWindow::onFinished(Op op, int status, const CoreWorker::Result& r)
 
     if (op == Op::Erase || op == Op::Blank)
         m_blank = ok;
-    else if (op == Op::Program || op == Op::Batch || op == Op::Detect)
+    else if (op == Op::Program || op == Op::Batch || op == Op::Detect || op == Op::SelectChip)
         m_blank = false;
 
     // Chip data (Read, or read-back after a verify mismatch).
     if ((op == Op::Read || op == Op::Verify || op == Op::Batch) && !r.data.isEmpty()) {
-        m_chip = r.data;
-        showBuffer(m_chipView, m_chip);
+        m_chipView->setBuffer(r.data);
+        m_chipView->setBaseAddress(m_range.addr);
+        m_fileView->clearCompare();
         m_tabs->setCurrentWidget(m_chipView);
     }
 
+    if (op == Op::ListChips && ok)
+        m_chips = r.chips;
+
     const QString name = QString::fromLatin1(CoreWorker::opName(op));
-    if (op == Op::Detect) {
-        m_haveChip = ok;
+    if (op == Op::Detect || op == Op::SelectChip) {
+        if (op == Op::Detect || ok) // a failed manual selection keeps the previous chip
+            m_haveChip = ok;
         if (ok) {
             m_chipInfo = r.chip;
             QString vcc = r.chip.vcc_mv ? tr(" · %1 V").arg(r.chip.vcc_mv / 1000.0, 0, 'f', 1) : QString();
-            m_progLabel->setText(tr("%1 · FW %2 · SN %3")
-                                     .arg(QString::fromUtf8(r.prog.model), QString::fromUtf8(r.prog.firmware))
-                                     .arg(r.prog.serial));
+            if (r.prog.model[0]) // SelectChip only fills prog when it had to open the programmer
+                m_progLabel->setText(tr("%1 · FW %2 · SN %3")
+                                         .arg(QString::fromUtf8(r.prog.model), QString::fromUtf8(r.prog.firmware))
+                                         .arg(r.prog.serial));
             m_chipLabel->setText(QStringLiteral("%1 · %2 · %3%4")
                                      .arg(chipName(), QString::fromUtf8(r.chip.manufacturer),
                                           sizeStr(r.chip.size_bytes), vcc));
-            onLog(LvlOk, tr("Detected %1 (%2, %3) on %4 FW %5")
-                             .arg(chipName(), QString::fromUtf8(r.chip.manufacturer), sizeStr(r.chip.size_bytes),
-                                  QString::fromUtf8(r.prog.model), QString::fromUtf8(r.prog.firmware)));
-        } else {
+            if (op == Op::Detect)
+                onLog(LvlOk, tr("Detected %1 (%2, %3) on %4 FW %5")
+                                 .arg(chipName(), QString::fromUtf8(r.chip.manufacturer), sizeStr(r.chip.size_bytes),
+                                      QString::fromUtf8(r.prog.model), QString::fromUtf8(r.prog.firmware)));
+            else
+                onLog(LvlOk, tr("Chip %1 selected manually").arg(chipName()));
+        } else if (op == Op::Detect) {
             m_chipLabel->setText(tr("No chip"));
             if (status == SF_ERR_NO_DEVICE || status == SF_ERR_ACCESS)
                 m_progLabel->setText(tr("No programmer"));
         }
     } else if (op == Op::LoadFile && ok) {
-        m_file = r.data;
-        m_fileLabel->setText(QStringLiteral("%1 · %2 · CRC32 %3")
-                                 .arg(QFileInfo(r.path).fileName(), sizeStr(quint64(m_file.size())),
-                                      QString::number(r.crc, 16).toUpper().rightJustified(8, QLatin1Char('0'))));
-        showBuffer(m_fileView, m_file);
+        m_fileView->setBuffer(r.data);
+        m_fileView->setBaseAddress(0);
+        m_chipView->clearCompare();
+        m_fileName = QFileInfo(r.path).fileName();
+        updateFileLabel(r.crc, false);
         m_tabs->setCurrentWidget(m_fileView);
-        onLog(LvlOk, tr("Loaded %1 (%2 bytes)").arg(r.path).arg(m_file.size()));
+        onLog(LvlOk, tr("Loaded %1 (%2 bytes)").arg(r.path).arg(fileBuf().size()));
     } else if (op == Op::SaveFile && ok) {
         onLog(LvlOk, tr("Saved %1").arg(r.path));
+    } else if (op == Op::ReadStatus && ok) {
+        m_srLast = QByteArray(reinterpret_cast<const char*>(r.sr), 3);
+        onLog(LvlOk, tr("Status: SR1=%1 SR2=%2 SR3=%3")
+                         .arg(r.sr[0], 2, 16, QLatin1Char('0')).arg(r.sr[1], 2, 16, QLatin1Char('0'))
+                         .arg(r.sr[2], 2, 16, QLatin1Char('0')));
+        if (m_srDlg)
+            m_srDlg->setValues(r.sr);
     } else if (ok) {
         onLog(LvlOk, tr("%1 OK").arg(name));
     }
 
     if (!ok) {
-        if (status == SF_ERR_VERIFY && (op == Op::Verify || op == Op::Batch))
-            onLog(LvlError, QString::asprintf("Verify failed at 0x%08llX",
-                                              static_cast<unsigned long long>(m_range.addr + r.firstDiff)));
-        else
+        if (status == SF_ERR_VERIFY && (op == Op::Verify || op == Op::Batch)) {
+            const quint64 at = m_range.addr + r.firstDiff;
+            onLog(LvlError, QString::asprintf("Verify failed at 0x%08llX", static_cast<unsigned long long>(at)));
+            if (!r.data.isEmpty()) { // read-back succeeded: both buffers start at offset 0 <-> chip address range.addr
+                m_fileView->setCompare(chipBuf(), 0);
+                m_chipView->setCompare(fileBuf(), 0);
+                m_fileView->gotoAddress(r.firstDiff);
+                m_chipView->gotoAddress(at);
+                m_tabs->setCurrentWidget(m_chipView);
+            }
+        } else
             handleError(op, status);
     }
     updateActions();
+
+    if (op == Op::WriteStatus && m_srDlg) // always read back, also after a failed write
+        startReadStatus();
+    else if (op == Op::ListChips && ok)
+        openChipSelect();
 }
 
 // ---- confirmations / texts ----
 
 QString MainWindow::chipName() const { return QString::fromUtf8(m_chipInfo.type_name); }
+
+const QByteArray& MainWindow::fileBuf() const { return m_fileView->buffer(); }
+const QByteArray& MainWindow::chipBuf() const { return m_chipView->buffer(); }
+
+HexView* MainWindow::currentView() const { return m_tabs->currentWidget() == m_chipView ? m_chipView : m_fileView; }
+
+void MainWindow::updateRangeLabel()
+{
+    QString s;
+    if (m_range.addr == 0 && m_range.len == 0)
+        s = tr("whole chip");
+    else if (m_range.len == 0)
+        s = tr("%1 to end").arg(hexAddr(m_range.addr));
+    else
+        s = QStringLiteral("%1 +0x%2").arg(hexAddr(m_range.addr), QString::number(m_range.len, 16).toUpper());
+    m_rangeLabel->setText(tr("Range: %1").arg(s));
+}
+
+void MainWindow::updateFileLabel(quint32 crc, bool modified)
+{
+    m_fileLabel->setText(QStringLiteral("%1 · %2 · CRC32 %3%4")
+                             .arg(m_fileName, sizeStr(quint64(fileBuf().size())),
+                                  QString::number(crc, 16).toUpper().rightJustified(8, QLatin1Char('0')),
+                                  modified ? tr(" (edited)") : QString()));
+}
 
 QString MainWindow::rangeText() const
 {
@@ -421,7 +471,7 @@ void MainWindow::actSave()
                                                       tr("Binary (*.bin);;All files (*)"));
     if (path.isEmpty())
         return;
-    start(tr("Saving %1…").arg(path), [path, d = m_chip](CoreWorker* w) { w->saveFile(path, d); });
+    start(tr("Saving %1…").arg(path), [path, d = chipBuf()](CoreWorker* w) { w->saveFile(path, d); });
 }
 
 void MainWindow::actBlank()
@@ -438,31 +488,123 @@ void MainWindow::actErase()
 
 void MainWindow::actProg()
 {
-    const QString range = tr("file (%1 bytes) to chip address %2").arg(m_file.size()).arg(hexAddr(m_range.addr));
+    const QString range = tr("file (%1 bytes) to chip address %2").arg(fileBuf().size()).arg(hexAddr(m_range.addr));
     const QString extra = m_blank ? QString() : tr("Prog does not erase; use Batch or Erase first.");
     if (!confirm(tr("Program"), tr("Program the file into the chip?"), range, extra))
         return;
-    start(tr("Programming…"), [d = m_file, r = m_range](CoreWorker* w) { w->program(d, r); });
+    start(tr("Programming…"), [d = fileBuf(), r = m_range](CoreWorker* w) { w->program(d, r); });
 }
 
 void MainWindow::actVerify()
 {
-    start(tr("Verifying…"), [d = m_file, r = m_range](CoreWorker* w) { w->verify(d, r); });
+    start(tr("Verifying…"), [d = fileBuf(), r = m_range](CoreWorker* w) { w->verify(d, r); });
 }
 
 void MainWindow::actBatch()
 {
-    const QString range = tr("%1 (file: %2 bytes)").arg(rangeText()).arg(m_file.size());
-    if (!confirm(tr("Batch"), tr("Run Erase → Blank → Prog → Verify?"), range))
+    if (m_steps.isEmpty()) {
+        QMessageBox::warning(this, tr("Batch"), tr("The batch sequence is empty. Choose its steps in Config."));
         return;
-    start(tr("Batch…"), [d = m_file, r = m_range](CoreWorker* w) {
-        w->batch({Op::Erase, Op::Blank, Op::Program, Op::Verify}, d, r);
-    });
+    }
+    QStringList names;
+    for (Op s : m_steps)
+        names << QString::fromLatin1(CoreWorker::opName(s));
+    const QString range = tr("%1 (file: %2 bytes)").arg(rangeText()).arg(fileBuf().size());
+    if (!confirm(tr("Batch"), tr("Run %1?").arg(names.join(QStringLiteral(" → "))), range))
+        return;
+    start(tr("Batch…"), [d = fileBuf(), r = m_range, s = m_steps](CoreWorker* w) { w->batch(s, d, r); });
 }
 
 void MainWindow::actRead()
 {
     start(tr("Reading…"), [r = m_range](CoreWorker* w) { w->read(r); });
+}
+
+void MainWindow::actConfig()
+{
+    ConfigDialog dlg(m_cfg, m_range, m_steps, m_haveChip ? &m_chipInfo : nullptr, this);
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+    m_cfg = dlg.config();
+    m_range = dlg.range();
+    m_steps = dlg.steps();
+    // The worker applies it with sf_configure before its next chip operation.
+    QMetaObject::invokeMethod(m_worker, [w = m_worker, cfg = m_cfg] { w->setConfig(cfg); }, Qt::QueuedConnection);
+    updateRangeLabel();
+    onLog(LvlInfo, tr("Configuration updated (%1)").arg(m_rangeLabel->text()));
+}
+
+void MainWindow::actSelect()
+{
+    if (m_chips.isEmpty())
+        start(tr("Loading chip database…"), [](CoreWorker* w) { w->listChips(); }); // dialog opens on completion
+    else
+        openChipSelect();
+}
+
+void MainWindow::openChipSelect()
+{
+    ChipSelectDialog dlg(m_chips, this);
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+    const QString type = dlg.selectedType();
+    start(tr("Selecting %1…").arg(type), [type, cfg = m_cfg](CoreWorker* w) { w->selectChip(type, cfg); });
+}
+
+void MainWindow::startReadStatus()
+{
+    start(tr("Reading status registers…"), [](CoreWorker* w) { w->readStatus(); });
+}
+
+void MainWindow::actStatus()
+{
+    StatusRegDialog dlg(this);
+    connect(&dlg, &StatusRegDialog::readRequested, this, &MainWindow::startReadStatus);
+    connect(&dlg, &StatusRegDialog::writeRequested, this, [this](const QByteArray& v) {
+        QString s = tr("Status write:");
+        for (int i = 0; i < v.size(); ++i)
+            s += QStringLiteral(" SR%1 %2 → %3")
+                     .arg(i + 1)
+                     .arg(i < m_srLast.size() ? QString::asprintf("%02X", uchar(m_srLast.at(i))) : QStringLiteral("??"),
+                          QString::asprintf("%02X", uchar(v.at(i))));
+        onLog(LvlInfo, s);
+        start(tr("Writing status…"), [v](CoreWorker* w) { w->writeStatus(v); });
+    });
+    m_srDlg = &dlg; // modal: onFinished keeps running inside exec() and routes the results here
+    startReadStatus();
+    dlg.exec();
+    m_srDlg = nullptr;
+}
+
+void MainWindow::actGoto()
+{
+    bool ok = false;
+    QString t = QInputDialog::getText(this, tr("Go to address"), tr("Address (hex):"), QLineEdit::Normal, QString(), &ok)
+                    .trimmed();
+    if (!ok)
+        return;
+    if (t.startsWith(QStringLiteral("0x"), Qt::CaseInsensitive))
+        t.remove(0, 2);
+    const quint64 a = t.toULongLong(&ok, 16);
+    if (!ok || !currentView()->gotoAddress(a))
+        statusBar()->showMessage(tr("Address outside the buffer"), 3000);
+}
+
+void MainWindow::actNextDiff()
+{
+    if (!currentView()->nextDiff())
+        statusBar()->showMessage(tr("No differences"), 3000);
+}
+
+void MainWindow::actCopyToFile()
+{
+    m_fileView->setBuffer(chipBuf());
+    m_fileView->setBaseAddress(0);
+    m_chipView->clearCompare();
+    m_fileName = tr("(chip buffer)");
+    updateFileLabel(crcOf(fileBuf()), false);
+    m_tabs->setCurrentWidget(m_fileView);
+    updateActions();
 }
 
 void MainWindow::actCancel()

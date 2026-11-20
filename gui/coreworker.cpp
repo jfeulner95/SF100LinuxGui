@@ -24,6 +24,8 @@ const char* CoreWorker::opName(Op op)
     case Op::ReadStatus: return "Read status";
     case Op::WriteStatus: return "Write status";
     case Op::Batch: return "Batch";
+    case Op::ListChips: return "List chips";
+    case Op::SelectChip: return "Select chip";
     }
     return "?";
 }
@@ -175,8 +177,62 @@ void CoreWorker::detect(sf_config cfg)
     m_open = (st == SF_OK);
     if (st == SF_OK) st = sf_get_programmer_info(&r.prog);
     if (st == SF_OK) st = sf_configure(&cfg);
+    m_cfg = cfg;
+    m_cfgDirty = (st != SF_OK);
     if (st == SF_OK) st = sf_detect_chip(&r.chip);
     end(Op::Detect, st, r);
+}
+
+void CoreWorker::setConfig(sf_config cfg)
+{
+    m_cfg = cfg;
+    m_cfgDirty = true;
+}
+
+int CoreWorker::applyCfg()
+{
+    if (!m_cfgDirty || !m_open)
+        return SF_OK;
+    const int st = sf_configure(&m_cfg);
+    m_cfgDirty = (st != SF_OK);
+    return st;
+}
+
+void CoreWorker::listChips()
+{
+    begin();
+    Result r;
+    int n = sf_chipdb_count();
+    int st = n < 0 ? n : SF_OK;
+    if (st == SF_OK) {
+        r.chips.reserve(n);
+        for (int i = 0; i < n && st == SF_OK; ++i) {
+            sf_chip_info c{};
+            st = sf_chipdb_get(i, &c);
+            if (st == SF_OK)
+                r.chips.append(c);
+        }
+    }
+    if (st != SF_OK)
+        r.chips.clear();
+    end(Op::ListChips, st, r);
+}
+
+void CoreWorker::selectChip(QString typeName, sf_config cfg)
+{
+    begin();
+    Result r;
+    int st = SF_OK;
+    if (!m_open) { // unlike detect(): keep an already open session
+        st = sf_open(0);
+        m_open = (st == SF_OK);
+        if (st == SF_OK) st = sf_get_programmer_info(&r.prog);
+    }
+    if (st == SF_OK) st = sf_configure(&cfg);
+    m_cfg = cfg;
+    m_cfgDirty = (st != SF_OK);
+    if (st == SF_OK) st = sf_select_chip(typeName.toUtf8().constData(), &r.chip);
+    end(Op::SelectChip, st, r);
 }
 
 void CoreWorker::loadFile(QString path)
@@ -210,28 +266,35 @@ void CoreWorker::blank(Range rg)
 {
     begin();
     Result r;
-    end(Op::Blank, doBlank(rg), r);
+    int st = applyCfg();
+    if (st == SF_OK) st = doBlank(rg);
+    end(Op::Blank, st, r);
 }
 
 void CoreWorker::erase(Range rg)
 {
     begin();
     Result r;
-    end(Op::Erase, doErase(rg), r);
+    int st = applyCfg();
+    if (st == SF_OK) st = doErase(rg);
+    end(Op::Erase, st, r);
 }
 
 void CoreWorker::program(QByteArray data, Range rg)
 {
     begin();
     Result r;
-    end(Op::Program, doProgram(data, rg), r);
+    int st = applyCfg();
+    if (st == SF_OK) st = doProgram(data, rg);
+    end(Op::Program, st, r);
 }
 
 void CoreWorker::verify(QByteArray data, Range rg)
 {
     begin();
     Result r;
-    int st = doVerify(data, rg, r);
+    int st = applyCfg();
+    if (st == SF_OK) st = doVerify(data, rg, r);
     end(Op::Verify, st, r);
 }
 
@@ -239,7 +302,8 @@ void CoreWorker::read(Range rg)
 {
     begin();
     Result r;
-    int st = doRead(rg, r.data);
+    int st = applyCfg();
+    if (st == SF_OK) st = doRead(rg, r.data);
     if (st != SF_OK)
         r.data.clear();
     end(Op::Read, st, r);
@@ -249,7 +313,7 @@ void CoreWorker::readStatus()
 {
     begin();
     Result r;
-    int st = SF_OK;
+    int st = applyCfg();
     for (int i = 0; i < 3 && st == SF_OK; ++i)
         st = sf_read_status(i, &r.sr[i]);
     end(Op::ReadStatus, st, r);
@@ -259,9 +323,11 @@ void CoreWorker::writeStatus(QByteArray values)
 {
     begin();
     Result r;
-    int st = SF_ERR_ARG;
-    if (values.size() == 1 || values.size() == 2)
-        st = sf_write_status(reinterpret_cast<const uint8_t*>(values.constData()), int(values.size()));
+    int st = applyCfg();
+    if (st == SF_OK)
+        st = (values.size() == 1 || values.size() == 2)
+                 ? sf_write_status(reinterpret_cast<const uint8_t*>(values.constData()), int(values.size()))
+                 : int(SF_ERR_ARG);
     end(Op::WriteStatus, st, r);
 }
 
@@ -269,8 +335,10 @@ void CoreWorker::batch(QList<Op> steps, QByteArray data, Range rg)
 {
     begin();
     Result r;
-    int st = SF_OK;
+    int st = applyCfg();
     for (Op step : steps) {
+        if (st != SF_OK)
+            break;
         emitLines(true);
         emit log(SF_LOG_INFO, QStringLiteral("Batch: %1").arg(QString::fromLatin1(opName(step))));
         switch (step) {

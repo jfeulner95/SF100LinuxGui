@@ -7,13 +7,14 @@
 #include <QMetaType>
 #include <QObject>
 #include <QString>
+#include <QVector>
 
 #include "sf100core.h"
 
 class CoreWorker : public QObject {
     Q_OBJECT
 public:
-    enum class Op { Detect, LoadFile, SaveFile, Blank, Erase, Program, Verify, Read, ReadStatus, WriteStatus, Batch };
+    enum class Op { Detect, LoadFile, SaveFile, Blank, Erase, Program, Verify, Read, ReadStatus, WriteStatus, Batch, ListChips, SelectChip };
 
     struct Range {
         quint64 addr = 0;
@@ -28,6 +29,7 @@ public:
         quint8 sr[3]{};        // ReadStatus
         quint32 crc = 0;       // LoadFile: CRC32 of data
         QString path;          // LoadFile / SaveFile
+        QVector<sf_chip_info> chips; // ListChips (chip database); SelectChip fills chip (+prog if it had to open)
     };
 
     explicit CoreWorker(QObject* parent = nullptr);
@@ -36,6 +38,11 @@ public:
 
 public slots:
     void detect(sf_config cfg);
+    // Stores cfg (no engine call). It is applied with sf_configure before the next chip op (see applyCfg()).
+    void setConfig(sf_config cfg);
+    void listChips();
+    // Manual chip selection (like --type): opens the programmer only if not open, applies cfg, selects.
+    void selectChip(QString typeName, sf_config cfg);
     void loadFile(QString path);
     void saveFile(QString path, QByteArray data);
     void blank(Range r);
@@ -64,6 +71,7 @@ private:
     void emitLines(bool flushRemainder);
     void begin();
     void end(Op op, int status, Result& r);
+    int applyCfg(); // sf_configure(m_cfg) when it changed since the last apply and the device is open
 
     int doBlank(Range r);
     int doErase(Range r);
@@ -72,6 +80,8 @@ private:
     int doRead(Range r, QByteArray& out);
 
     bool m_open = false;
+    sf_config m_cfg{};
+    bool m_cfgDirty = false;
     bool m_hooked = false;
     QByteArray m_lineBuf;
     int m_lineLevel = SF_LOG_INFO;
