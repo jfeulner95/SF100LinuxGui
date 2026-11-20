@@ -89,24 +89,10 @@ jobs:
           mkdir -p dist && mv sf100gui-x86_64.AppImage dist/
 
       # Self-contained app: Qt, libusb, libxml2 and their dependencies are copied into the bundle, so it runs
-      # without Homebrew. dpcmd is shipped inside too (finds the chip DB in ../Resources).
+      # without Homebrew (verified by starting it with Homebrew's Cellar hidden). dpcmd is shipped inside too.
       - name: Deploy macOS app
         if: runner.os == 'macOS'
-        run: |
-          APP=build/gui/sf100gui.app
-          cp build/dpcmd "$APP/Contents/MacOS/"
-          cp LICENSE "$APP/Contents/Resources/"
-          "$(brew --prefix qt)/bin/macdeployqt" "$APP" -executable="$APP/Contents/MacOS/dpcmd" -always-overwrite
-          # install_name_tool invalidated the signatures; Apple Silicon refuses unsigned code, so sign ad hoc.
-          codesign --force --deep --sign - "$APP"
-          # Fail if any binary in the bundle still loads a library from Homebrew.
-          if find "$APP" -type f \( -perm +111 -o -name '*.dylib' \) -exec otool -L {} + | grep -E '^\s+(/opt/homebrew|/usr/local)/'; then
-            echo "::error::bundle still references Homebrew libraries"; exit 1
-          fi
-          "$APP/Contents/MacOS/sf100gui" --smoke
-          "$APP/Contents/MacOS/dpcmd"
-          mkdir -p dist
-          hdiutil create -volname "SF100 GUI" -srcfolder "$APP" -ov -format UDZO dist/sf100gui-${{ matrix.os }}.dmg
+        run: ci/macos-deploy.sh build/gui/sf100gui.app dist/sf100gui-${{ matrix.os }}.dmg
 
       # tar keeps the executable bit (the artifact zip alone would drop it)
       - name: Package
