@@ -23,6 +23,11 @@ set_target_properties(sf100gui PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED 
 target_link_libraries(sf100gui PRIVATE Qt6::Widgets sf100core)
 target_compile_options(sf100gui PRIVATE -Wall)
 
+# Linux: embed the udev rule so the GUI can install it (Help > Install udev rule), also from an AppImage.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    qt_add_resources(sf100gui "udev" PREFIX "/udev" BASE ${ENGINE_DIR} FILES ${ENGINE_DIR}/60-dediprog.rules)
+endif()
+
 # The engine looks for ChipInfoDb.dedicfg next to the executable, or in <exe_dir>/../Resources (macOS bundle).
 if(APPLE)
     add_custom_command(TARGET sf100gui POST_BUILD

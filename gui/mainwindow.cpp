@@ -10,6 +10,7 @@
 #include <QApplication>
 #include <QDockWidget>
 #include <QFileDialog>
+#include <QFile>
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QHBoxLayout>
@@ -22,12 +23,15 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QProcess>
 #include <QProgressBar>
+#include <QPushButton>
 #include <QRegularExpression>
 #include <QStatusBar>
 #include <QStringList>
 #include <QStyle>
 #include <QTabWidget>
+#include <QTemporaryFile>
 #include <QTime>
 #include <QToolBar>
 #include <QVBoxLayout>
@@ -161,7 +165,13 @@ void MainWindow::buildUi()
         opMenu->addAction(a);
     auto* about = new QAction(tr("&About"), this);
     connect(about, &QAction::triggered, this, &MainWindow::actAbout);
-    menuBar()->addMenu(tr("&Help"))->addAction(about);
+    auto* helpMenu = menuBar()->addMenu(tr("&Help"));
+#ifdef Q_OS_LINUX
+    auto* udev = new QAction(tr("Install &udev rule…"), this);
+    connect(udev, &QAction::triggered, this, &MainWindow::actInstallUdev);
+    helpMenu->addAction(udev);
+#endif
+    helpMenu->addAction(about);
 
     // Buffers
     m_fileView = new HexView(true);
@@ -298,13 +308,21 @@ void MainWindow::handleError(Op op, int status)
     if (status == SF_ERR_NO_DEVICE) {
         onLog(LvlWarn, tr("Connect an SF100/SF600 programmer and press Detect"));
     } else if (status == SF_ERR_ACCESS) {
-        QMessageBox::warning(
-            this, tr("USB access denied"),
-            tr("No permission to access the programmer.\n\n"
-               "On Linux, install the udev rules:\n"
-               "  1. Copy 60-dediprog.rules to /etc/udev/rules.d/\n"
-               "  2. sudo udevadm control --reload-rules && sudo udevadm trigger\n"
-               "  3. Unplug and replug the programmer, then press Detect."));
+        QMessageBox box(QMessageBox::Warning, tr("USB access denied"),
+                        tr("No permission to access the programmer.\n\n"
+                           "On Linux, install the udev rules:\n"
+                           "  1. Copy 60-dediprog.rules to /etc/udev/rules.d/\n"
+                           "  2. sudo udevadm control --reload-rules && sudo udevadm trigger\n"
+                           "  3. Unplug and replug the programmer, then press Detect."),
+                        QMessageBox::Close, this);
+#ifdef Q_OS_LINUX
+        QPushButton* install = box.addButton(tr("Install udev rule…"), QMessageBox::AcceptRole);
+        box.exec();
+        if (box.clickedButton() == install)
+            actInstallUdev();
+#else
+        box.exec();
+#endif
     }
 }
 
@@ -618,4 +636,47 @@ void MainWindow::actAbout()
     QMessageBox::about(this, tr("About SF100 GUI"),
                        tr("<b>SF100 GUI</b> %1<br>Uses libsf100core.<br>Qt %2")
                            .arg(QApplication::applicationVersion(), QString::fromLatin1(qVersion())));
+}
+
+// Linux: install the embedded udev rule with root rights via polkit (pkexec asks for the password).
+// The rule is copied to a temp file first: root cannot read files inside an AppImage's FUSE mount.
+void MainWindow::actInstallUdev()
+{
+#ifdef Q_OS_LINUX
+    if (QMessageBox::question(this, tr("Install udev rule"),
+                              tr("Install 60-dediprog.rules to /etc/udev/rules.d/ and reload udev?\n"
+                                 "This needs administrator rights; you will be asked for your password.")) !=
+        QMessageBox::Yes)
+        return;
+    QFile src(QStringLiteral(":/udev/60-dediprog.rules"));
+    auto* tmp = new QTemporaryFile(this);
+    if (!src.open(QIODevice::ReadOnly) || !tmp->open() || tmp->write(src.readAll()) < 0 || !tmp->flush()) {
+        onLog(LvlError, tr("Could not prepare the udev rule file"));
+        delete tmp;
+        return;
+    }
+    auto* proc = new QProcess(this);
+    connect(proc, &QProcess::finished, this, [this, proc, tmp](int code, QProcess::ExitStatus es) {
+        if (es == QProcess::NormalExit && code == 0)
+            onLog(LvlOk, tr("udev rule installed. Unplug and replug the programmer, then press Detect."));
+        else
+            onLog(LvlError, tr("Installing the udev rule failed (pkexec exit code %1). Install it manually as "
+                               "described in the README.").arg(code));
+        proc->deleteLater();
+        tmp->deleteLater();
+    });
+    connect(proc, &QProcess::errorOccurred, this, [this, proc, tmp](QProcess::ProcessError e) {
+        if (e != QProcess::FailedToStart) // other errors are followed by finished()
+            return;
+        onLog(LvlError, tr("pkexec not found. Install the udev rule manually as described in the README."));
+        proc->deleteLater();
+        tmp->deleteLater();
+    });
+    // The temp path is passed as $1, never spliced into the script.
+    proc->start(QStringLiteral("pkexec"),
+                {QStringLiteral("/bin/sh"), QStringLiteral("-c"),
+                 QStringLiteral("install -m 0644 \"$1\" /etc/udev/rules.d/60-dediprog.rules && "
+                                "udevadm control --reload-rules && udevadm trigger --subsystem-match=usb"),
+                 QStringLiteral("sh"), tmp->fileName()});
+#endif
 }

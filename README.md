@@ -80,6 +80,10 @@ Outputs: `build/dpcmd` and `build/gui/sf100gui.app` (the chip database is placed
 
 Without a udev rule, opening the programmer fails with "Permission denied" (`SF_ERR_ACCESS`; the GUI shows a "USB access denied" dialog).
 
+Easiest way: in the GUI (also the AppImage) use **Help > Install udev rule…**, or the **Install udev rule…** button in the "USB access denied" dialog. The rule is embedded in the program; it is installed with `pkexec` (you are asked for your password) to `/etc/udev/rules.d/60-dediprog.rules`, and udev is reloaded. This needs polkit, which every common desktop has.
+
+Manually:
+
 ```bash
 sudo cp external/SF100Linux/60-dediprog.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
@@ -121,13 +125,24 @@ dpcmd -p image.bin -a0x100                  # program without erase (area assume
 
 ## CI artifacts
 
-The `build` workflow runs on ubuntu-latest, macos-latest (Apple Silicon) and macos-15-intel, and also builds the engine standalone with its own Makefile on Linux. Each run uploads `dpcmd-<os>.tar.gz`, containing a `dpcmd/` directory with:
+The `build` workflow runs on ubuntu-24.04, macos-latest (Apple Silicon) and macos-15-intel, and also builds the engine standalone with its own Makefile on Linux. Each run uploads `dpcmd-<os>.tar.gz`, containing a `dpcmd/` directory with:
 
 - `dpcmd`
 - `ChipInfoDb.dedicfg`
 - `60-dediprog.rules`
 - `LICENSE`
 - `sf100gui` (Linux) or `sf100gui.app` (macOS)
+
+On Linux each run also uploads `sf100gui-x86_64-appimage` with `sf100gui-x86_64.AppImage`: a single file with Qt, libusb and libxml2 bundled, so no packages need to be installed. Make it executable and start it:
+
+```bash
+chmod +x sf100gui-x86_64.AppImage
+./sf100gui-x86_64.AppImage
+```
+
+- Requires a distribution at least as new as Ubuntu 24.04 (glibc 2.39), for example Ubuntu 24.04+, Debian 13+, Fedora 40+, because it is built on the ubuntu-24.04 runner.
+- Starting an AppImage needs FUSE 2 (`sudo apt install libfuse2t64` on Ubuntu 24.04). Without FUSE: `./sf100gui-x86_64.AppImage --appimage-extract-and-run`.
+- The udev rule cannot be installed by the AppImage itself; use Help > Install udev rule… once (see "Linux USB permissions").
 
 On macOS each run also uploads `sf100gui-<os>-dmg` with a disk image. The app inside is self-contained: Qt, libusb and libxml2 are bundled, and `dpcmd` is included at `sf100gui.app/Contents/MacOS/dpcmd`. Homebrew is not needed. Use the image that matches your Mac (`macos-latest` = Apple Silicon, `macos-15-intel` = Intel).
 

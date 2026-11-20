@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=SF100 GUI
+Comment=SPI flash programmer GUI for DediProg SF100/SF600
+Exec=sf100gui
+Icon=sf100gui
+Categories=Development;Electronics;
+Terminal=false

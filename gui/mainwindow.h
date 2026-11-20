@@ -47,6 +47,7 @@ private slots:
     void actCopyToFile();
     void actCancel();
     void actAbout();
+    void actInstallUdev(); // Linux only; no-op elsewhere
 
 private:
     QAction* makeAction(const QString& text, const char* themeIcon, int fallbackPixmap, void (MainWindow::*slot)());

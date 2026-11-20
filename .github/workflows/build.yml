@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, macos-15-intel]
+        os: [ubuntu-24.04, macos-latest, macos-15-intel]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -63,6 +63,31 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+      # Single-file Linux app with Qt, libusb and libxml2 bundled. Runs on distros with glibc >= the runner's
+      # (Ubuntu 24.04). The udev rule still has to be installed on the host. Tools pinned to release tags.
+      - name: AppImage (Linux)
+        if: runner.os == 'Linux'
+        env:
+          LINUXDEPLOY_TAG: 1-alpha-20251107-1
+          PLUGIN_QT_TAG: 1-alpha-20250213-1
+          APPIMAGE_EXTRACT_AND_RUN: 1 # no FUSE on the runner
+        run: |
+          base=https://github.com/linuxdeploy
+          curl -fsSL -o linuxdeploy-x86_64.AppImage "$base/linuxdeploy/releases/download/$LINUXDEPLOY_TAG/linuxdeploy-x86_64.AppImage"
+          curl -fsSL -o linuxdeploy-plugin-qt-x86_64.AppImage "$base/linuxdeploy-plugin-qt/releases/download/$PLUGIN_QT_TAG/linuxdeploy-plugin-qt-x86_64.AppImage"
+          chmod +x linuxdeploy*.AppImage
+          # bin/sf100gui + share/DediProg/ChipInfoDb.dedicfg (found via <exe_dir>/../share/DediProg)
+          DESTDIR="$PWD/AppDir" cmake --install build --prefix /usr
+          export QMAKE=$(command -v qmake6 || echo /usr/lib/qt6/bin/qmake)
+          export EXTRA_PLATFORM_PLUGINS=libqoffscreen.so # for the smoke test below
+          export LDAI_OUTPUT=sf100gui-x86_64.AppImage OUTPUT=sf100gui-x86_64.AppImage
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir \
+            -e AppDir/usr/bin/sf100gui -e AppDir/usr/bin/dpcmd \
+            -d gui/sf100gui.desktop -i gui/sf100gui.svg \
+            --plugin qt --output appimage
+          QT_QPA_PLATFORM=offscreen ./sf100gui-x86_64.AppImage --smoke
+          mkdir -p dist && mv sf100gui-x86_64.AppImage dist/
+
       # Self-contained app: Qt, libusb, libxml2 and their dependencies are copied into the bundle, so it runs
       # without Homebrew. dpcmd is shipped inside too (finds the chip DB in ../Resources).
       - name: Deploy macOS app
@@ -99,6 +124,12 @@ jobs:
         with:
           name: dpcmd-${{ matrix.os }}
           path: dist/dpcmd-${{ matrix.os }}.tar.gz
+
+      - uses: actions/upload-artifact@v6
+        if: runner.os == 'Linux'
+        with:
+          name: sf100gui-x86_64-appimage
+          path: dist/sf100gui-x86_64.AppImage
 
       - uses: actions/upload-artifact@v6
         if: runner.os == 'macOS'

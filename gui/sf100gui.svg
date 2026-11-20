@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- generic SPI flash chip: SOIC-8 package -->
+  <rect x="64" y="40" width="128" height="176" rx="12" fill="#2b2f36"/>
+  <circle cx="88" cy="66" r="8" fill="#9aa3ad"/>
+  <g fill="#c9ced4">
+    <rect x="28" y="62" width="36" height="16" rx="3"/>
+    <rect x="28" y="102" width="36" height="16" rx="3"/>
+    <rect x="28" y="142" width="36" height="16" rx="3"/>
+    <rect x="28" y="182" width="36" height="16" rx="3"/>
+    <rect x="192" y="62" width="36" height="16" rx="3"/>
+    <rect x="192" y="102" width="36" height="16" rx="3"/>
+    <rect x="192" y="142" width="36" height="16" rx="3"/>
+    <rect x="192" y="182" width="36" height="16" rx="3"/>
+  </g>
+  <text x="128" y="148" font-family="DejaVu Sans, Arial, sans-serif" font-size="40" font-weight="bold"
+        fill="#e8eaed" text-anchor="middle">SPI</text>
+</svg>
